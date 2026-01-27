@@ -100,19 +100,34 @@ class OverlayGenerator:
         img_paths = [p for p in path.glob('**/*') if p.is_file() and p.suffix.lower() in ('.jpg', '.jpeg', '.png')]
         img_paths = natsorted(img_paths)
 
-        page_htmls = []
-
-        for img_path in tqdm(img_paths, desc='Processing pages...'):
+        results = {}
+        uncached_paths = []
+        cached_paths = []
+        for img_path in img_paths:
             json_path = (results_dir / img_path.relative_to(path)).with_suffix('.json')
             if json_path.is_file():
-                result = load_json(json_path)
+                cached_paths.append((img_path, json_path))
             else:
-                self.init_models()
-                result = self.mpocr(img_path)
-                json_path.parent.mkdir(parents=True, exist_ok=True)
-                dump_json(result, json_path)
+                uncached_paths.append(img_path)
 
-            page_html = self.get_page_html(result, img_path.relative_to(out_dir))
+        for img_path, json_path in tqdm(cached_paths, desc='Loading cached pages...'):
+            results[img_path] = load_json(json_path)
+
+        if uncached_paths:
+            self.init_models()
+            batch_size = 16
+            for i in tqdm(range(0, len(uncached_paths), batch_size), desc='Processing pages...'):
+                batch = uncached_paths[i:i + batch_size]
+                batch_results = self.mpocr.call_batch(batch)
+                for img_path, result in zip(batch, batch_results):
+                    results[img_path] = result
+                    json_path = (results_dir / img_path.relative_to(path)).with_suffix('.json')
+                    json_path.parent.mkdir(parents=True, exist_ok=True)
+                    dump_json(result, json_path)
+
+        page_htmls = []
+        for img_path in img_paths:
+            page_html = self.get_page_html(results[img_path], img_path.relative_to(out_dir))
             page_htmls.append(page_html)
 
         if is_demo:
