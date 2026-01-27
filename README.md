@@ -1,15 +1,10 @@
-> This is a fork of [mokuro](https://github.com/kha-white/mokuro) that adds various improvements and features to the manga viewer.
-> ### This fork is outdated and no longer being maintained, use the new  [mokuro reader](https://github.com/ZXY101/mokuro-reader) instead.
-
 # Additions:
 
-## Anki connect integration:
+## OCR Optimizations:
 
-The reader now has an `Advanced settings` modal where you can specify various new settings, including enabling anki connect integration.
-
-When anki connect integration is enabled, it will allow you to instantly add the image and sentence to your last created card. You can configure whether or not to crop the image before adding it to the card as well as various other settings
-
-https://github.com/ZXY101/mokuro/assets/39561296/ade9e655-dcb9-4e99-9244-5df5971cc26b
+Processing is now significantly faster thanks to:
+- **Batched OCR**: Multiple text lines are processed together on the GPU.
+- **Overlapped CPU/GPU execution**: A producer-consumer pipeline allows the CPU to prepare images while the GPU is performing OCR, maximizing hardware utilization.
 
 ## Settings importing/exporting:
 
@@ -99,7 +94,7 @@ See also:
 
 # Installation
 
-You need Python 3.6, 3.7, 3.8, 3.9, or 3.10. As of April 2023, PyTorch unfortunately does not support Python 3.11 yet, see pytorch/pytorch#86566.
+You need Python 3.6 or newer (including 3.11 and 3.12). 
 
 Some users have reported problems with Python installed from Microsoft Store. If you see an error:
 `ImportError: DLL load failed while importing fugashi: The specified module could not be found.`,
