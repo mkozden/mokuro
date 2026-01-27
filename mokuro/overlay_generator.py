@@ -59,9 +59,11 @@ class OverlayGenerator:
     def __init__(self,
                  pretrained_model_name_or_path='kha-white/manga-ocr-base',
                  force_cpu=False,
+                 page_batch_size=16,
                  **kwargs):
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
         self.force_cpu = force_cpu
+        self.page_batch_size = page_batch_size
         self.kwargs = kwargs
         self.mpocr = None
 
@@ -115,9 +117,8 @@ class OverlayGenerator:
 
         if uncached_paths:
             self.init_models()
-            batch_size = 16
-            for i in tqdm(range(0, len(uncached_paths), batch_size), desc='Processing pages...'):
-                batch = uncached_paths[i:i + batch_size]
+            for i in tqdm(range(0, len(uncached_paths), self.page_batch_size), desc='Processing pages...'):
+                batch = uncached_paths[i:i + self.page_batch_size]
                 batch_results = self.mpocr.call_batch(batch)
                 for img_path, result in zip(batch, batch_results):
                     results[img_path] = result

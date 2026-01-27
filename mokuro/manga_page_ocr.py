@@ -23,12 +23,16 @@ class MangaPageOcr:
                  max_ratio_vert=16,
                  max_ratio_hor=8,
                  anchor_window=2,
+                 mocr_batch_size=16,
+                 crop_queue_maxsize=128,
                  ):
 
         self.text_height = text_height
         self.max_ratio_vert = max_ratio_vert
         self.max_ratio_hor = max_ratio_hor
         self.anchor_window = anchor_window
+        self.mocr_batch_size = mocr_batch_size
+        self.crop_queue_maxsize = crop_queue_maxsize
 
         cuda = torch.cuda.is_available()
         device = 'cuda' if cuda and not force_cpu else 'cpu'
@@ -95,7 +99,7 @@ class MangaPageOcr:
 
     def call_batch(self, img_paths):
         results = [None] * len(img_paths)
-        crop_queue = Queue(maxsize=128)
+        crop_queue = Queue(maxsize=self.crop_queue_maxsize)
 
         def producer():
             try:
@@ -142,11 +146,10 @@ class MangaPageOcr:
         producer_thread = Thread(target=producer, daemon=True)
         producer_thread.start()
 
-        mocr_batch_size = 16
         while True:
             batch = []
             info = []
-            while len(batch) < mocr_batch_size:
+            while len(batch) < self.mocr_batch_size:
                 item = crop_queue.get()
                 if item is None:
                     crop_queue.put(None)
