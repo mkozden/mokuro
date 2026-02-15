@@ -5,6 +5,7 @@ from loguru import logger
 from scipy.signal.windows import gaussian
 from queue import Queue
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
 
 from comic_text_detector.inference import TextDetector
 from manga_ocr import MangaOcr
@@ -23,8 +24,8 @@ class MangaPageOcr:
                  max_ratio_vert=16,
                  max_ratio_hor=8,
                  anchor_window=2,
-                 mocr_batch_size=16,
-                 crop_queue_maxsize=128,
+                 mocr_batch_size=64,
+                 crop_queue_maxsize=512,
                  ):
 
         self.text_height = text_height
@@ -39,8 +40,11 @@ class MangaPageOcr:
         logger.info(f'Initializing text detector using {device}')
         self.text_detector = TextDetector(model_path=cache.comic_text_detector, input_size=detector_input_size,
                                           device=device,
+                                          half=False,
                                           act='leaky')
         self.mocr = MangaOcr(pretrained_model_name_or_path, force_cpu)
+        if cuda and not force_cpu:
+            self.mocr.model.half()
 
     def __call__(self, img_path):
         img = imread(img_path)
@@ -90,6 +94,8 @@ class MangaPageOcr:
 
         pixel_values = self.mocr.processor(images, return_tensors="pt").pixel_values
         pixel_values = pixel_values.to(self.mocr.model.device)
+        if self.mocr.model.dtype == torch.float16:
+            pixel_values = pixel_values.half()
 
         generated_ids = self.mocr.model.generate(pixel_values, max_length=300)
 
@@ -101,45 +107,52 @@ class MangaPageOcr:
         results = [None] * len(img_paths)
         crop_queue = Queue(maxsize=self.crop_queue_maxsize)
 
+        def process_single_image(img_idx, img_path):
+            try:
+                img = imread(img_path)
+                H, W, *_ = img.shape
+                mask, mask_refined, blk_list = self.text_detector(img, refine_mode=1, keep_undetected_mask=True)
+
+                result = {'version': __version__, 'img_width': W, 'img_height': H, 'blocks': []}
+                results[img_idx] = result
+
+                for blk_idx, blk in enumerate(blk_list):
+                    result_blk = {
+                        'box': list(blk.xyxy),
+                        'vertical': blk.vertical,
+                        'font_size': blk.font_size,
+                        'lines_coords': [],
+                        'lines': []
+                    }
+                    result['blocks'].append(result_blk)
+
+                    for line_idx, line in enumerate(blk.lines_array()):
+                        if blk.vertical:
+                            max_ratio = self.max_ratio_vert
+                        else:
+                            max_ratio = self.max_ratio_hor
+
+                        line_crops, cut_points = self.split_into_chunks(
+                            img, mask_refined, blk, line_idx,
+                            textheight=self.text_height, max_ratio=max_ratio, anchor_window=self.anchor_window)
+
+                        result_blk['lines_coords'].append(line.tolist())
+                        result_blk['lines'].append([''] * len(line_crops))
+                        
+                        for line_crop_idx, line_crop in enumerate(line_crops):
+                            if blk.vertical:
+                                line_crop = cv2.rotate(line_crop, cv2.ROTATE_90_CLOCKWISE)
+                            crop_queue.put((img_idx, blk_idx, line_idx, line_crop_idx, Image.fromarray(line_crop)))
+            except Exception as e:
+                logger.error(f"Error processing image {img_path}: {e}")
+
         def producer():
             try:
-                for img_idx, img_path in enumerate(img_paths):
-                    img = imread(img_path)
-                    H, W, *_ = img.shape
-                    mask, mask_refined, blk_list = self.text_detector(img, refine_mode=1, keep_undetected_mask=True)
-
-                    result = {'version': __version__, 'img_width': W, 'img_height': H, 'blocks': []}
-                    results[img_idx] = result
-
-                    for blk_idx, blk in enumerate(blk_list):
-                        result_blk = {
-                            'box': list(blk.xyxy),
-                            'vertical': blk.vertical,
-                            'font_size': blk.font_size,
-                            'lines_coords': [],
-                            'lines': []
-                        }
-                        result['blocks'].append(result_blk)
-
-                        for line_idx, line in enumerate(blk.lines_array()):
-                            if blk.vertical:
-                                max_ratio = self.max_ratio_vert
-                            else:
-                                max_ratio = self.max_ratio_hor
-
-                            line_crops, cut_points = self.split_into_chunks(
-                                img, mask_refined, blk, line_idx,
-                                textheight=self.text_height, max_ratio=max_ratio, anchor_window=self.anchor_window)
-
-                            result_blk['lines_coords'].append(line.tolist())
-                            result_blk['lines'].append([''] * len(line_crops))
-                            
-                            for line_crop_idx, line_crop in enumerate(line_crops):
-                                if blk.vertical:
-                                    line_crop = cv2.rotate(line_crop, cv2.ROTATE_90_CLOCKWISE)
-                                crop_queue.put((img_idx, blk_idx, line_idx, line_crop_idx, Image.fromarray(line_crop)))
-            except Exception as e:
-                logger.error(f"Error in producer thread: {e}")
+                # Use a limited number of workers to not overwhelm the GPU with too many parallel detection calls,
+                # while still parallelizing the CPU-heavy refine_mask and imread.
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    for img_idx, img_path in enumerate(img_paths):
+                        executor.submit(process_single_image, img_idx, img_path)
             finally:
                 crop_queue.put(None)
 

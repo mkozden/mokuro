@@ -14,9 +14,9 @@ def run(*paths,
         as_one_file=True,
         disable_confirmation=True,
         mobile=True,
-        page_batch_size=16,
-        mocr_batch_size=16,
-        crop_queue_maxsize=128
+        page_batch_size=32,
+        mocr_batch_size=64,
+        crop_queue_maxsize=512
         ):
     paths = [Path(p).expanduser().absolute() for p in paths]
 
