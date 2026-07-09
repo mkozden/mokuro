@@ -113,21 +113,36 @@ class OverlayGenerator:
                 uncached_paths.append(img_path)
 
         for img_path, json_path in tqdm(cached_paths, desc='Loading cached pages...'):
-            results[img_path] = load_json(json_path)
+            cached_result = load_json(json_path)
+            if cached_result is None:
+                json_path.unlink()
+                uncached_paths.append(img_path)
+            else:
+                results[img_path] = cached_result
 
         if uncached_paths:
             self.init_models()
-            for i in tqdm(range(0, len(uncached_paths), self.page_batch_size), desc='Processing pages...'):
-                batch = uncached_paths[i:i + self.page_batch_size]
-                batch_results = self.mpocr.call_batch(batch)
-                for img_path, result in zip(batch, batch_results):
+
+            pbar = tqdm(total=len(uncached_paths), desc='Processing pages...')
+
+            def on_result(img_idx, result):
+                img_path = uncached_paths[img_idx]
+                if result is None:
+                    logger.error(f'Skipping page due to OCR failure (will retry on next run): {img_path}')
+                else:
                     results[img_path] = result
                     json_path = (results_dir / img_path.relative_to(path)).with_suffix('.json')
                     json_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_json(result, json_path)
+                pbar.update(1)
+
+            self.mpocr.call_batch(uncached_paths, on_result=on_result)
+            pbar.close()
 
         page_htmls = []
         for img_path in img_paths:
+            if img_path not in results:
+                continue
             page_html = self.get_page_html(results[img_path], img_path.relative_to(out_dir))
             page_htmls.append(page_html)
 
