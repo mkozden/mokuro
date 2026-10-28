@@ -22,8 +22,10 @@ def run(
     ignore_errors: bool = False,
     no_cache: bool = False,
     unzip: bool = False,
-    legacy_html: bool = True,
+    legacy_html: bool = False,
     as_one_file: bool = True,
+    mocr_batch_size: int = 64,
+    crop_queue_maxsize: int = 512,
     version: bool = False,
 ):
     """
@@ -41,6 +43,8 @@ def run(
         unzip: Extract volumes in zip/cbz format in their original location.
         legacy_html: Enable legacy HTML output. If True, acts as if --unzip is True.
         as_one_file: Applies only to legacy HTML. If False, generate separate CSS and JS files instead of embedding them in the HTML file.
+        mocr_batch_size: Max number of text line crops recognized by manga-ocr in one batch.
+        crop_queue_maxsize: Max number of preprocessed crops buffered between text detection and OCR.
         version: Print the version of mokuro and exit.
     """
 
@@ -55,7 +59,7 @@ def run(
         logger.warning(
             "Legacy HTML output is deprecated and will not be further developed. "
             "It's recommended to use .mokuro format and web reader instead. "
-            "Legacy HTML will be disabled by default in the future. To explicitly enable it, run with option --legacy-html."
+            "It is disabled by default; it was enabled with option --legacy-html."
         )
         # legacy HTML works only with unzipped output
         unzip = True
@@ -117,7 +121,11 @@ def run(
             return
 
     mg = MokuroGenerator(
-        pretrained_model_name_or_path=pretrained_model_name_or_path, force_cpu=force_cpu, disable_ocr=disable_ocr
+        pretrained_model_name_or_path=pretrained_model_name_or_path,
+        force_cpu=force_cpu,
+        disable_ocr=disable_ocr,
+        mocr_batch_size=mocr_batch_size,
+        crop_queue_maxsize=crop_queue_maxsize,
     )
 
     with TemporaryDirectory() as tmp_dir:

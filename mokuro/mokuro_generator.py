@@ -43,26 +43,45 @@ class MokuroGenerator:
 
         img_paths = volume.get_img_paths()
 
-        for img_path_rel in tqdm(img_paths.values(), desc="Processing pages..."):
+        uncached_paths = []
+        for img_path_rel in img_paths.values():
+            json_path = (volume.path_ocr_cache / img_path_rel).with_suffix(".json")
+
             try:
-                json_path = (volume.path_ocr_cache / img_path_rel).with_suffix(".json")
+                # a null JSON is a leftover from a failed run, treat it as a cache miss
+                already_processed = load_json(json_path) is not None
+            except (FileNotFoundError, JSONDecodeError, UnicodeDecodeError):
+                already_processed = False
 
-                try:
-                    load_json(json_path)
-                    already_processed = True
-                except (FileNotFoundError, JSONDecodeError, UnicodeDecodeError):
-                    already_processed = False
+            if no_cache or not already_processed:
+                uncached_paths.append(img_path_rel)
 
-                if no_cache or not already_processed:
-                    self.init_models()
-                    result = self.mpocr(volume.path_in / img_path_rel)
+        if uncached_paths:
+            self.init_models()
+            failed = []
+            pbar = tqdm(total=len(uncached_paths), desc="Processing pages...")
+
+            def on_result(img_idx, result):
+                img_path_rel = uncached_paths[img_idx]
+                if result is None:
+                    failed.append(img_path_rel)
+                else:
+                    json_path = (volume.path_ocr_cache / img_path_rel).with_suffix(".json")
                     json_path.parent.mkdir(parents=True, exist_ok=True)
                     dump_json(result, json_path)
-            except Exception as e:
+                pbar.update(1)
+
+            try:
+                self.mpocr.call_batch([volume.path_in / p for p in uncached_paths], on_result=on_result)
+            finally:
+                pbar.close()
+
+            if failed:
+                msg = f"Failed to process {len(failed)} page(s), they will be retried on the next run: {failed}"
                 if ignore_errors:
-                    logger.error(e)
+                    logger.error(msg)
                 else:
-                    raise e
+                    raise RuntimeError(msg)
 
         self.generate_mokuro_file(volume, ignore_errors=ignore_errors)
 
